@@ -1,3 +1,8 @@
+#include <iostream>
+#include <filesystem>
+#include <fstream>
+#include <unordered_set>
+
 #include <cassert>
 #include <goto-programs/goto_convert_functions.h>
 #include <goto-programs/goto_inline.h>
@@ -9,6 +14,74 @@
 #include <util/std_code.h>
 #include <util/std_expr.h>
 #include <util/type_byte_size.h>
+ 
+ namespace
+ {
+ std::string sanitize_filename_component(const std::string &s)
+ {
+   std::string out;
+   out.reserve(s.size());
+ 
+   for (char c : s)
+   {
+     const bool invalid = c == '<' || c == '>' || c == ':' || c == '"' ||
+                          c == '/' || c == '\\' || c == '|' || c == '?' ||
+                          c == '*' || c == ' ' || c == '\t' || c == '\n' ||
+                          c == '\r';
+     out.push_back(invalid ? '_' : c);
+   }
+ 
+   if (out.empty())
+     out = "_";
+ 
+   return out;
+ }
+ 
+ std::filesystem::path get_goto_convert_output_dir()
+ {
+   std::filesystem::path p(__FILE__);
+   p = p.parent_path();           // .../esbmc/src/goto-programs
+   p = p.parent_path();           // .../esbmc/src
+   p = p.parent_path();           // .../esbmc
+   p = p.parent_path();           // project root (outside esbmc)
+   return p / "GOTO-convert";
+ }
+ 
+ class scoped_cout_redirectt
+ {
+ public:
+   explicit scoped_cout_redirectt(const std::filesystem::path &file_path)
+     : old_buf(std::cout.rdbuf())
+   {
+     static std::unordered_set<std::string> initialized_files;
+ 
+     std::error_code ec;
+     std::filesystem::create_directories(file_path.parent_path(), ec);
+ 
+     const std::string key = file_path.string();
+     const bool first_time_this_run = initialized_files.insert(key).second;
+ 
+     std::ios::openmode mode = std::ios::out;
+     mode |= first_time_this_run ? std::ios::trunc : std::ios::app;
+ 
+     out.open(file_path, mode);
+     if (out.is_open())
+       std::cout.rdbuf(out.rdbuf());
+   }
+ 
+   ~scoped_cout_redirectt()
+   {
+     std::cout.rdbuf(old_buf);
+   }
+ 
+   scoped_cout_redirectt(const scoped_cout_redirectt &) = delete;
+   scoped_cout_redirectt &operator=(const scoped_cout_redirectt &) = delete;
+ 
+ private:
+   std::streambuf *old_buf;
+   std::ofstream out;
+ };
+ } // namespace
 
 goto_convert_functionst::goto_convert_functionst(
   contextt &_context,
@@ -25,15 +98,37 @@ void goto_convert_functionst::goto_convert()
   symbol_listt symbol_list;
   context.Foreach_operand_in_order([&symbol_list](symbolt &s) {
     if (!s.is_type && s.type.is_code())
+    {
       symbol_list.push_back(&s);
+    }
   });
 
   for (auto &it : symbol_list)
   {
+    const std::filesystem::path out_dir = get_goto_convert_output_dir();
+    const std::string file_base =
+      sanitize_filename_component(it->name.as_string()) + "-" +
+      sanitize_filename_component(it->id.as_string());
+    const std::filesystem::path out_file = out_dir / (file_base + ".txt");
+ 
+    scoped_cout_redirectt redirect(out_file);
+ 
+    std::cout << "\n\n========== SYMBOL =========="
+              << "\n";
+    std::cout << "[func] @" << (const void *)it << " name=" << it->name
+              << " id=" << it->id << " module=" << it->module
+              << " mode=" << it->mode << " file=" << it->location.get_file()
+              << " line=" << it->location.get_line() << "\n";
+    std::cout << "=======================================\n";
+ 
     convert_function(*it);
   }
 
   functions.compute_location_numbers();
+
+  // std::cout << "\n\n========== ALL GOTO FUNCTIONS ==========\n";
+  // functions.output(ns, std::cout);
+  // std::cout << "\n=======================================\n";
 }
 
 bool goto_convert_functionst::hide(const goto_programt &goto_program)
@@ -181,6 +276,17 @@ void goto_convert_functionst::convert_function(symbolt &symbol)
 
   if (hide(f.body))
     f.body.hide = true;
+
+  std::cout << "\n=============================================\n";
+  std::cout << "GOTO FUNCTION CONVERTED\n";
+  std::cout << "id             : " << identifier << "\n";
+  std::cout << "body_available : " << (f.body_available ? "true" : "false") << "\n";
+  std::cout << "instruction #  : " << f.body.instructions.size() << "\n";
+  std::cout << "---------------------------------------------\n";
+
+  f.body.output(ns, identifier, std::cout);
+
+  std::cout << "=============================================\n";
 }
 
 void goto_convert(

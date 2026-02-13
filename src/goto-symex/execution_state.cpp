@@ -69,6 +69,8 @@ execution_statet::execution_statet(
   cur_state->global_guard.make_true();
   cur_state->global_guard.add(get_guard_identifier());
 
+  thread_priority.push_back(99);
+
   atomic_numbers.push_back(0);
 
   if (DFS_traversed.size() <= state.source.thread_nr)
@@ -133,6 +135,7 @@ execution_statet &execution_statet::operator=(const execution_statet &ex)
   threads_state = ex.threads_state;
   preserved_paths = ex.preserved_paths;
   atomic_numbers = ex.atomic_numbers;
+  thread_priority = ex.thread_priority;
   DFS_traversed = ex.DFS_traversed;
   thread_start_data = ex.thread_start_data;
   last_active_thread = ex.last_active_thread;
@@ -751,6 +754,7 @@ unsigned int execution_statet::add_thread(const goto_programt *prog)
   }
 
   thread_start_data.emplace_back();
+  thread_priority.push_back(0); // Default priority 0 for new threads
 
   // We invalidated all threads_state refs, so reset cur_state ptr.
   cur_state = &threads_state[active_thread];

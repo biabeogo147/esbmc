@@ -1398,6 +1398,11 @@ void goto_symext::intrinsic_spawn_thread(
   // Invalidates current state reference!
   unsigned int thread_id = art.get_cur_state().add_thread(&prog);
 
+  // Inherit priority from parent thread
+  unsigned int parent_tid = art.get_cur_state().active_thread;
+  int parent_priority = art.get_cur_state().get_thread_priority(parent_tid);
+  art.get_cur_state().set_thread_priority(thread_id, parent_priority);
+
   statet &state = art.get_cur_state().get_active_state();
 
   expr2tc thread_id_exp = constant_int2tc(call.ret->type, BigInt(thread_id));
@@ -1409,6 +1414,83 @@ void goto_symext::intrinsic_spawn_thread(
   // Force a context switch point. If the caller is in an atomic block, it'll be
   // blocked, but a context switch will be forced when we exit the atomic block.
   // Otherwise, this will cause the required context switch.
+  art.get_cur_state().force_cswitch();
+}
+
+void goto_symext::intrinsic_activation_task(
+  const code_function_call2t &call,
+  reachability_treet &art)
+{
+  if (
+    (k_induction || inductive_step) &&
+    !options.get_bool_option("disable-inductive-step"))
+  {
+    log_warning(
+      "k-induction does not support concurrency yet. Disabling inductive step");
+
+    // Disable inductive step on multi threaded code
+    options.set_option("disable-inductive-step", true);
+  }
+
+  // Extract task_id (first argument - string)
+  expr2tc task_id_expr = call.operands[0];
+  cur_state->rename(task_id_expr);
+
+  const expr2tc &base_expr = get_base_object(task_id_expr);
+  if (!is_constant_string2t(base_expr))
+  {
+    log_error("__ESBMC_activation_task: task_id must be a constant string");
+    abort();
+  }
+  
+  std::string task_id = to_constant_string2t(base_expr).value.as_string();
+
+  // Extract function address (second argument)
+  expr2tc addr = call.operands[1];
+  simplify(addr);
+  assert(is_address_of2t(addr));
+  const address_of2t &addrof = to_address_of2t(addr);
+  assert(is_symbol2t(addrof.ptr_obj));
+  const irep_idt &symname = to_symbol2t(addrof.ptr_obj).thename;
+
+  goto_functionst::function_mapt::const_iterator it =
+    art.goto_functions.function_map.find(symname);
+  if (it == art.goto_functions.function_map.end())
+  {
+    log_error("Activating task \"{}\": symbol not found", symname);
+    abort();
+  }
+
+  if (!it->second.body_available)
+  {
+    log_error("Activating task \"{}\": no body", symname);
+    abort();
+  }
+
+  const goto_programt &prog = it->second.body;
+
+  // Create new thread
+  unsigned int thread_id = art.get_cur_state().add_thread(&prog);
+
+  // Set thread priority based on task_id
+  int priority = 0;
+  auto priority_it = art.task_priority.find(task_id);
+  if (priority_it != art.task_priority.end())
+  {
+    priority = priority_it->second;
+  }
+  art.get_cur_state().set_thread_priority(thread_id, priority);
+
+  statet &state = art.get_cur_state().get_active_state();
+
+  if (call.ret)
+  {
+    expr2tc thread_id_exp = constant_int2tc(call.ret->type, BigInt(thread_id));
+    state.value_set.assign(call.ret, thread_id_exp);
+    symex_assign(code_assign2tc(call.ret, thread_id_exp), true);
+  }
+
+  // Force a context switch point
   art.get_cur_state().force_cswitch();
 }
 

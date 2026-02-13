@@ -16,6 +16,10 @@
 #include <util/message.h>
 #include <util/std_expr.h>
 
+#include <fstream>
+#include <nlohmann/json.hpp>
+#include <algorithm>
+
 reachability_treet::reachability_treet(
   goto_functionst &goto_functions,
   const namespacet &ns,
@@ -44,6 +48,69 @@ reachability_treet::reachability_treet(
   por = !options.get_bool_option("no-por");
   main_thread_ended = false;
   target_template = std::move(target);
+  task_priority_enabled = false; // Default: disabled
+
+  // Parse task priority JSON if provided
+  if (options.get_option("task-priority-json") != "")
+  {
+    parse_task_priority_json(options.get_option("task-priority-json"));
+    task_priority_enabled = true; // Enable only when JSON config is provided
+  }
+}
+
+void reachability_treet::parse_task_priority_json(const std::string &json_path)
+{
+  std::ifstream file(json_path);
+  if (!file.is_open())
+  {
+    log_error("Could not open task priority JSON file: {}", json_path);
+    return;
+  }
+
+  nlohmann::json root;
+  try
+  {
+    file >> root;
+  }
+  catch (const std::exception &e)
+  {
+    log_error(
+      "Failed to parse task priority JSON file: {} ({})",
+      json_path,
+      e.what());
+    return;
+  }
+
+  // Support both {"tasks": {...}} and direct {...} formats
+  const nlohmann::json *tasks = &root;
+  if (root.is_object() && root.contains("tasks"))
+    tasks = &root.at("tasks");
+
+  if (!tasks->is_object())
+  {
+    log_error(
+      "Invalid task priority JSON format in {}: expected object at root or in 'tasks'",
+      json_path);
+    return;
+  }
+
+  for (auto it = tasks->begin(); it != tasks->end(); ++it)
+  {
+    const std::string &key = it.key();
+    const auto &val = it.value();
+
+    if (val.is_number_integer())
+    {
+      task_priority[key] = val.get<int>();
+      log_debug("parse_task_priority_json", "Loaded task priority: {} = {}", key, task_priority[key]);
+    }
+    else
+    {
+      log_warning("Invalid priority value for task '{}', expected integer", key);
+    }
+  }
+
+  log_status("Loaded {} task priorities from {}", task_priority.size(), json_path);
 }
 
 void reachability_treet::setup_for_new_explore()
@@ -141,9 +208,15 @@ void reachability_treet::create_next_state()
 
     /* Make it active, make it follow on from previous state... */
     if (new_state->get_active_state_number() != next_thread_id)
+    {
       new_state->increment_context_switch();
+      new_state->switch_to_thread(next_thread_id);
+    }
 
-    new_state->switch_to_thread(next_thread_id);
+    // We have consumed a switch point, even if the scheduler decided to keep
+    // running the same thread (e.g., because it has higher priority).
+    // update_after_switch_point clears force_cswitch state and resets DFS
+    // bookkeeping so execution can continue past the current point.
     new_state->update_after_switch_point();
   }
 }
@@ -167,15 +240,64 @@ reachability_treet::decide_ileave_direction(execution_statet &ex_state)
     return check_thread_viable(tid, true) && ex_state.dfs_explore_thread(tid);
   };
 
-  signed int tid = 0, user_tid = 0;
-
-  // Get thread ID from user if interactive mode is enabled
-  tid = get_cur_state().active_thread + 1;
+  // If interactive mode is enabled, respect user choice
   if (interactive_ileaves)
   {
-    tid = get_ileave_direction_from_user();
-    user_tid = tid;
+    signed int user_tid = get_ileave_direction_from_user();
+    if (is_thread_schedulable(user_tid))
+      return user_tid;
+    log_error("User selected thread {} is not schedulable", user_tid);
+    abort();
   }
+
+  // Use task-priority scheduling only if enabled
+  if (task_priority_enabled)
+  {
+    // Build list of schedulable threads with their priorities
+    std::vector<std::pair<int, unsigned int>> schedulable_threads; // (priority, tid)
+    
+    for (unsigned int tid = 0; tid < ex_state.threads_state.size(); ++tid)
+    {
+      if (is_thread_schedulable(tid))
+      {
+        int priority = ex_state.get_thread_priority(tid);
+        schedulable_threads.emplace_back(priority, tid);
+      }
+    }
+
+    // If no schedulable threads found, return invalid thread ID
+    if (schedulable_threads.empty())
+    {
+      return ex_state.threads_state.size();
+    }
+
+    // Sort by priority (descending), then by thread ID (ascending) for tie-breaking
+    std::sort(schedulable_threads.begin(), schedulable_threads.end(),
+      [&](const std::pair<int, unsigned int> &a, const std::pair<int, unsigned int> &b) {
+        if (a.first != b.first)
+          return a.first > b.first; // Higher priority first
+        
+        // Tie-break: prefer thread that comes after current active thread (round-robin style)
+        unsigned int active = ex_state.active_thread;
+        unsigned int tid_a = a.second;
+        unsigned int tid_b = b.second;
+        
+        // Normalize thread IDs relative to active thread for round-robin tie-breaking
+        unsigned int norm_a = (tid_a > active) ? tid_a : tid_a + ex_state.threads_state.size();
+        unsigned int norm_b = (tid_b > active) ? tid_b : tid_b + ex_state.threads_state.size();
+        
+        return norm_a < norm_b;
+      });
+
+    // Return the highest priority thread (with tie-breaking)
+    return schedulable_threads[0].second;
+  }
+
+  // Original ESBMC scheduler logic (fallback when task-priority is disabled)
+  signed int tid = 0;
+
+  // Start from next thread after current active thread
+  tid = get_cur_state().active_thread + 1;
 
   // Try finding a schedulable thread in the forward direction
   for (; tid < (int)ex_state.threads_state.size(); ++tid)
@@ -197,13 +319,6 @@ reachability_treet::decide_ileave_direction(execution_statet &ex_state)
   // If no valid thread is found, set tid to the size of threads_state
   if (tid < 0)
     tid = ex_state.threads_state.size();
-
-  // Validate user choice in interactive mode
-  if (interactive_ileaves && tid != user_tid)
-  {
-    log_error("Ileave code selected different thread from user choice");
-    abort();
-  }
 
   return tid;
 }

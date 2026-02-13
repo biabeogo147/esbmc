@@ -1,3 +1,5 @@
+#include <iostream>
+
 #include <cassert>
 #include <goto-programs/destructor.h>
 #include <goto-programs/goto_convert_class.h>
@@ -118,6 +120,9 @@ void goto_convertt::goto_convert(const codet &code, goto_programt &dest)
 
 void goto_convertt::goto_convert_rec(const codet &code, goto_programt &dest)
 {
+  std::cout << "\n--- AST ---";
+  std::cout << "\n" << code.pretty() << "\n";
+
   convert(code, dest);
 
   finish_gotos(dest);
@@ -290,6 +295,12 @@ void goto_convertt::convert(const codet &code, goto_programt &dest)
     dest.instructions.back().code = expr2tc();
     dest.instructions.back().location = code.location();
   }
+
+  std::cout << "\n=============================================";
+  std::cout << "\n--- GOTO Program after step ---\n";
+  dest.output(ns, irep_idt(), std::cout);
+  std::cout << "=============================================\n";
+
 }
 
 void goto_convertt::convert_throw_decl_end(

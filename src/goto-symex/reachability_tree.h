@@ -179,6 +179,12 @@ public:
   unsigned int decide_ileave_direction(execution_statet &ex_state);
 
   /**
+   *  Parse task priority JSON configuration file.
+   *  @param json_path Path to JSON file containing task priorities
+   */
+  void parse_task_priority_json(const std::string &json_path);
+
+  /**
    *  Prints state of execution_statet stack.
    *  Primarily for debugging; takes the current stack of execution_statet s
    *  and prints a stack trace from the thread executing where the context
@@ -320,6 +326,10 @@ public:
   optionst &options;
   /** __ESBMC_main thread has ended */
   bool main_thread_ended;
+  /** Map from task name to priority for task-based scheduling */
+  std::unordered_map<std::string, int> task_priority;
+  /** Flag to enable/disable task-priority scheduling */
+  bool task_priority_enabled;
 
 protected:
   /** Stack of execution states representing current interleaving.
