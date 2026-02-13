@@ -1,5 +1,4 @@
-add_library(algorithms algorithms.cpp
-        ../../../check-src/t_interleaving.c)
+add_library(algorithms algorithms.cpp)
 target_include_directories(algorithms
     PRIVATE ${Boost_INCLUDE_DIRS}
     )
