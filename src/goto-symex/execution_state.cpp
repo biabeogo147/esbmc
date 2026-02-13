@@ -264,7 +264,28 @@ void execution_statet::symex_step(reachability_treet &art)
       // TODO: we should support verifying memory leaks in multi-threaded C programs.
       assume(gen_false_expr());
       end_thread();
-      interleaving_unviable = true;
+
+      if (owning_rt->task_priority_enabled)
+      {
+        // If there are still live threads after main exits (e.g., tasks
+        // activated via __ESBMC_activation_task), keep exploring interleavings.
+        // Otherwise, keep the original optimization that stops this path.
+        bool has_live_threads = false;
+        for (const auto &thread_state : threads_state)
+        {
+          if (!thread_state.thread_ended && !thread_state.call_stack.empty())
+          {
+            has_live_threads = true;
+            break;
+          }
+        }
+
+        interleaving_unviable = !has_live_threads;
+      }
+      else
+      {
+        interleaving_unviable = true;
+      }
     }
     else
     {
