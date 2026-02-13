@@ -177,6 +177,29 @@ public:
     return thread_start_data[tid];
   }
 
+  /** Set thread priority */
+  void set_thread_priority(unsigned int tid, int priority)
+  {
+    if (tid >= thread_priority.size())
+    {
+      log_error("Setting thread priority for nonexistant thread {}", tid);
+      abort();
+    }
+
+    thread_priority[tid] = priority;
+  }
+
+  /** Get thread priority */
+  int get_thread_priority(unsigned int tid) const
+  {
+    if (tid >= thread_priority.size())
+    {
+      return 0; // Default priority
+    }
+
+    return thread_priority[tid];
+  }
+
   // Methods
 
   /**
@@ -522,6 +545,9 @@ public:
    *  is a workaround to prevent too much nondeterminism entering into the
    *  thread starting process. */
   std::vector<expr2tc> thread_start_data;
+  /** Task priority for each thread. Index aligned with threads_state.
+   *  Priority is inherited by all function calls within the thread. */
+  std::vector<int> thread_priority;
   /** Last active thread's ID. */
   unsigned int last_active_thread;
   /** Last executed insn -- sometimes necessary for analysis. */
