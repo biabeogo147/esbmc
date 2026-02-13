@@ -208,9 +208,15 @@ void reachability_treet::create_next_state()
 
     /* Make it active, make it follow on from previous state... */
     if (new_state->get_active_state_number() != next_thread_id)
+    {
       new_state->increment_context_switch();
+      new_state->switch_to_thread(next_thread_id);
+    }
 
-    new_state->switch_to_thread(next_thread_id);
+    // We have consumed a switch point, even if the scheduler decided to keep
+    // running the same thread (e.g., because it has higher priority).
+    // update_after_switch_point clears force_cswitch state and resets DFS
+    // bookkeeping so execution can continue past the current point.
     new_state->update_after_switch_point();
   }
 }
