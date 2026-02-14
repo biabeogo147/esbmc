@@ -260,9 +260,13 @@ void execution_statet::symex_step(reachability_treet &art)
       // check whether we reached the end of the main function and
       // whether we are not checking for (local and global) deadlocks and memory leaks.
       // We should end the main thread to avoid exploring further interleavings
+      // NOTE: in task-priority mode, don't force assume(false) here: doing so
+      // can propagate a false guard to the remaining runnable tasks and make
+      // their assertions vacuously true.
       // TODO: once we support at_exit, we should check this code
       // TODO: we should support verifying memory leaks in multi-threaded C programs.
-      assume(gen_false_expr());
+      if (!owning_rt->task_priority_enabled)
+        assume(gen_false_expr());
       end_thread();
 
       if (owning_rt->task_priority_enabled)
@@ -497,6 +501,11 @@ void execution_statet::preserve_last_paths()
   // If the thread terminated, there are no paths to preserve: this is the final
   // switching away.
   if (threads_state[last_active_thread].thread_ended)
+    return;
+
+  // Some transitions can leave a thread with an empty call stack before it is
+  // marked as ended; there is no frame-local path information to preserve.
+  if (threads_state[last_active_thread].call_stack.empty())
     return;
 
   // Examine the current execution state and the last insn, deciding which paths
